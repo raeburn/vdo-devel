@@ -7,6 +7,9 @@
 
 #include <linux/mempool.h>
 #include <linux/spinlock.h>
+#ifndef VDO_UPSTREAM
+#include <linux/version.h>
+#endif /* VDO_UPSTREAM */
 
 #include "logger.h"
 #include "memory-alloc.h"
@@ -20,6 +23,30 @@
 #include "types.h"
 #include "vdo.h"
 
+#ifndef VDO_UPSTREAM
+#undef VDO_USE_ALTERNATE
+#if defined(RHEL_RELEASE_CODE) && defined(RHEL_MINOR) && (RHEL_MINOR < 50)
+#if (RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(10, 0))
+#define VDO_USE_ALTERNATE
+#endif
+#else /* !RHEL_RELEASE_CODE */
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 10, 0))
+#define VDO_USE_ALTERNATE
+#endif
+#endif /* !RHEL_RELEASE_CODE */
+#endif /* !VDO_UPSTREAM */
+#ifndef __KERNEL__
+#define VDO_USE_ALTERNATIVE
+#endif
+#ifdef VDO_USE_ALTERNATIVE
+static inline void bio_list_merge_init(struct bio_list *bl,
+				       struct bio_list *bl2)
+{
+	bio_list_merge(bl, bl2);
+	bio_list_init(bl2);
+}
+
+#endif
 struct flusher {
 	struct vdo_completion completion;
 	/* The vdo to which this flusher belongs */
@@ -373,8 +400,7 @@ void vdo_dump_flusher(const struct flusher *flusher)
 static void initialize_flush(struct vdo_flush *flush, struct vdo *vdo)
 {
 	bio_list_init(&flush->bios);
-	bio_list_merge(&flush->bios, &vdo->flusher->waiting_flush_bios);
-	bio_list_init(&vdo->flusher->waiting_flush_bios);
+	bio_list_merge_init(&flush->bios, &vdo->flusher->waiting_flush_bios);
 #ifdef VDO_INTERNAL
 	flush->arrival_jiffies = vdo->flusher->flush_arrival_jiffies;
 #endif /* VDO_INTERNAL */

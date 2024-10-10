@@ -17,6 +17,9 @@
 #include <linux/minmax.h>
 #include <linux/sched.h>
 #include <linux/spinlock.h>
+#ifndef VDO_UPSTREAM
+#include <linux/version.h>
+#endif /* VDO_UPSTREAM */
 #include <linux/wait.h>
 
 #include "logger.h"
@@ -39,6 +42,30 @@
 #include "vio.h"
 #include "wait-queue.h"
 
+#ifndef VDO_UPSTREAM
+#undef VDO_USE_ALTERNATE
+#if defined(RHEL_RELEASE_CODE) && defined(RHEL_MINOR) && (RHEL_MINOR < 50)
+#if (RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(10, 0))
+#define VDO_USE_ALTERNATE
+#endif
+#else /* !RHEL_RELEASE_CODE */
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 10, 0))
+#define VDO_USE_ALTERNATE
+#endif
+#endif /* !RHEL_RELEASE_CODE */
+#endif /* !VDO_UPSTREAM */
+#ifndef __KERNEL__
+#define VDO_USE_ALTERNATIVE
+#endif
+#ifdef VDO_USE_ALTERNATIVE
+static inline void bio_list_merge_init(struct bio_list *bl,
+				       struct bio_list *bl2)
+{
+	bio_list_merge(bl, bl2);
+	bio_list_init(bl2);
+}
+
+#endif
 /**
  * DOC: Bio flags.
  *
@@ -649,8 +676,7 @@ static void assign_discard_permit(struct limiter *limiter)
 
 static void get_waiters(struct limiter *limiter)
 {
-	bio_list_merge(&limiter->waiters, &limiter->new_waiters);
-	bio_list_init(&limiter->new_waiters);
+	bio_list_merge_init(&limiter->waiters, &limiter->new_waiters);
 }
 
 static inline struct data_vio *get_available_data_vio(struct data_vio_pool *pool)
