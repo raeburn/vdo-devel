@@ -5,6 +5,7 @@
 
 #include "slab-depot.h"
 
+#include <linux/align.h>
 #include <linux/atomic.h>
 #include <linux/bio.h>
 #include <linux/err.h>
@@ -2167,28 +2168,89 @@ static void dirty_all_reference_blocks(struct vdo_slab *slab)
 		dirty_block(&slab->reference_blocks[i]);
 }
 
-/**
- * clear_provisional_references() - Clear the provisional reference counts from a reference block.
- * @block: The block to clear.
- */
-static void clear_provisional_references(struct reference_block *block)
-{
-	vdo_refcount_t *counters = get_reference_counters_for_block(block);
-	block_count_t j;
-
-	for (j = 0; j < COUNTS_PER_BLOCK; j++) {
-		if (counters[j] == PROVISIONAL_REFERENCE_COUNT) {
-			counters[j] = EMPTY_REFERENCE_COUNT;
-			block->allocated_count--;
-		}
-	}
-}
-
 static inline bool journal_points_equal(struct journal_point first,
 					struct journal_point second)
 {
 	return ((first.sequence_number == second.sequence_number) &&
 		(first.entry_count == second.entry_count));
+}
+
+/**
+ * match_bytes() - Check an 8-byte word for bytes matching the value specified
+ *
+ * On return each byte of the word is 1 if the input byte matched, 0 otherwise.
+ */
+static inline u64 match_bytes(u64 input, u8 match)
+{
+	u64 temp = input ^ (match * 0x0101010101010101ULL);
+	/* top bit of each byte is set iff top bit of temp byte is clear; rest are 0 */
+	u64 test_top_bits = ~temp & 0x8080808080808080ULL;
+	/* top bit of each byte is set iff low 7 bits of temp byte are clear; rest are useless */
+	u64 test_low_bits = 0x8080808080808080ULL - (temp & 0x7f7f7f7f7f7f7f7fULL);
+	/* return 1 when both tests indicate temp byte is 0 */
+	return (test_top_bits & test_low_bits) >> 7;
+}
+
+/**
+ * fix_provisional_and_count_allocated_refcounts() - Process newly loaded refcount array
+ *
+ * Scan a 8-byte-aligned array of counters, fixing up any "provisional" values that weren't
+ * cleaned up at shutdown, changing them internally to "empty", and return a count of how many of
+ * the blocks are allocated.
+ */
+static unsigned int fix_provisional_and_count_allocated_refcounts(vdo_refcount_t *counters)
+{
+	u8 *bytes = counters;
+	unsigned int empty_count = 0;
+	unsigned int length = COUNTS_PER_BLOCK;
+	unsigned int bytes_left = length;
+
+	/*
+	 * Sanity check assumptions used for optimizing this code: Counters are bytes. The counter
+	 * array is a multiple of 8 bytes long.
+	 */
+	BUILD_BUG_ON(sizeof(vdo_refcount_t) != 1);
+	BUILD_BUG_ON((COUNTS_PER_BLOCK % 8) != 0);
+
+	while (bytes_left > 0) {
+		/*
+		 * This is used effectively as 8 byte-size counters. Byte 0 counts how many words
+		 * had the target value found in byte 0, etc. We just have to avoid overflow.
+		 */
+		u64 split_count = 0;
+		/*
+		 * The counter "% 255" trick used below to fold split_count into empty_count
+		 * imposes a limit of 254 bytes examined each iteration of the outer loop.
+		 */
+		unsigned int max_bytes_this_iteration = min_t(unsigned int, 254, bytes_left);
+		/* We process 8 at a time, so round down to at most 248 bytes/31 words. */
+		unsigned int word_count = max_bytes_this_iteration / sizeof(u64);
+
+		while (word_count--) {
+			u64 word = *(u64 *)bytes;
+			u64 temp;
+
+			/* First, if we have any provisional refcount values, fix them. */
+			temp = match_bytes(word, PROVISIONAL_REFERENCE_COUNT);
+			if (temp) {
+				/* 'temp' has 0x01 bytes where 'word' has PROVISIONAL */
+				word ^= temp * (PROVISIONAL_REFERENCE_COUNT ^ EMPTY_REFERENCE_COUNT);
+				*(u64 *)bytes = word;
+			}
+
+			/* Now count the EMPTY_REFERENCE_COUNT bytes, updating the 8 counters. */
+			temp = match_bytes(word, EMPTY_REFERENCE_COUNT);
+			split_count += temp;
+			bytes += sizeof(u64);
+			bytes_left -= sizeof(u64);
+		}
+		/*
+		 * This use of modulus to add the bytes together only works if the sum is kept
+		 * below 255. Hence the 254 limit above.
+		 */
+		empty_count += split_count % 255;
+	}
+	return length - empty_count;
 }
 
 /**
@@ -2199,7 +2261,6 @@ static inline bool journal_points_equal(struct journal_point first,
 static void unpack_reference_block(struct packed_reference_block *packed,
 				   struct reference_block *block)
 {
-	block_count_t index;
 	sector_count_t i;
 	struct vdo_slab *slab = block->slab;
 	vdo_refcount_t *counters = get_reference_counters_for_block(block);
@@ -2225,11 +2286,7 @@ static void unpack_reference_block(struct packed_reference_block *packed,
 		}
 	}
 
-	block->allocated_count = 0;
-	for (index = 0; index < COUNTS_PER_BLOCK; index++) {
-		if (counters[index] != EMPTY_REFERENCE_COUNT)
-			block->allocated_count++;
-	}
+	block->allocated_count = fix_provisional_and_count_allocated_refcounts(counters);
 }
 
 /**
@@ -2250,7 +2307,6 @@ STATIC void finish_reference_block_load(struct vdo_completion *completion)
 		struct packed_reference_block *packed = (struct packed_reference_block *) data;
 
 		unpack_reference_block(packed, block);
-		clear_provisional_references(block);
 		slab->free_blocks -= block->allocated_count;
 	}
 	return_vio_to_pool(pooled);
