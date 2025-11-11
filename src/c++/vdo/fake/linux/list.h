@@ -29,6 +29,59 @@ struct list_head {
 #define LIST_POISON1  ((void *) 0x00100100)
 #define LIST_POISON2  ((void *) 0x00200200)
 
+#define READ_ONCE_FOR_LIST(x)                        \
+  __extension__ ({                                   \
+    union { __typeof__(x) __val; char __c[1]; } __u; \
+    read_once_size_for_list(&(x), __u.__c, sizeof(x)); \
+    __u.__val;                                       \
+  })
+
+#define WRITE_ONCE_FOR_LIST(x, val)                 \
+  __extension__ ({                                  \
+    union { __typeof__(x) __val; char __c[1]; } __u \
+      = { .__val = (__typeof__(x)) (val) };         \
+    write_once_size_for_list(&(x), __u.__c, sizeof(x)); \
+    __u.__val;                                      \
+  })
+
+static inline void read_once_size_for_list(const volatile void *p, void *res, int size)
+{
+  switch (size) {
+  case 1: *(u8 *)res       = *(const volatile u8 *)p;       break;
+  case 2: *(uint16_t *)res = *(const volatile uint16_t *)p; break;
+  case 4: *(uint32_t *)res = *(const volatile uint32_t *)p; break;
+  case 8: *(uint64_t *)res = *(const volatile uint64_t *)p; break;
+  default:
+    barrier();
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-qual"
+    __builtin_memcpy((void *)res, (const void *)p, size);
+#pragma GCC diagnostic pop
+    barrier();
+  }
+  /*
+   * FIXME: Some platforms such as Alpha may need an additional barrier
+   * here. See https://lkml.org/lkml/2019/11/8/1021
+   */
+}
+
+static inline void write_once_size_for_list(volatile void *p, void *res, int size)
+{
+  switch (size) {
+  case 1: *(volatile u8 *)p       = *(u8 *)res;       break;
+  case 2: *(volatile uint16_t *)p = *(uint16_t *)res; break;
+  case 4: *(volatile uint32_t *)p = *(uint32_t *)res; break;
+  case 8: *(volatile uint64_t *)p = *(uint64_t *)res; break;
+  default:
+    barrier();
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-qual"
+    __builtin_memcpy((void *)p, (const void *)res, size);
+#pragma GCC diagnostic pop
+    barrier();
+  }
+}
+
 /* linux/list.h */
 
 /*
@@ -55,7 +108,7 @@ struct list_head {
  */
 static inline void INIT_LIST_HEAD(struct list_head *list)
 {
-	WRITE_ONCE(list->next, list);
+	WRITE_ONCE_FOR_LIST(list->next, list);
 	list->prev = list;
 }
 
@@ -130,7 +183,7 @@ static inline void __list_add(struct list_head *new,
 	next->prev = new;
 	new->next = next;
 	new->prev = prev;
-	WRITE_ONCE(prev->next, new);
+	WRITE_ONCE_FOR_LIST(prev->next, new);
 }
 
 /**
@@ -170,7 +223,7 @@ static inline void list_add_tail(struct list_head *new, struct list_head *head)
 static inline void __list_del(struct list_head * prev, struct list_head * next)
 {
 	next->prev = prev;
-	WRITE_ONCE(prev->next, next);
+	WRITE_ONCE_FOR_LIST(prev->next, next);
 }
 
 /*
@@ -178,7 +231,7 @@ static inline void __list_del(struct list_head * prev, struct list_head * next)
  *
  * This is a special-purpose list clearing method used in the networking code
  * for lists allocated as per-cpu, where we don't want to incur the extra
- * WRITE_ONCE() overhead of a regular list_del_init(). The code that uses this
+ * WRITE_ONCE_FOR_LIST() overhead of a regular list_del_init(). The code that uses this
  * needs to check the node 'prev' pointer instead of calling list_empty().
  */
 static inline void __list_del_clearprev(struct list_head *entry)
@@ -339,7 +392,7 @@ static inline int list_is_last(const struct list_head *list,
  */
 static inline int list_empty(const struct list_head *head)
 {
-	return READ_ONCE(head->next) == head;
+	return READ_ONCE_FOR_LIST(head->next) == head;
 }
 
 /**
@@ -584,7 +637,7 @@ static inline void list_splice_tail_init(struct list_head *list,
  */
 #define list_first_entry_or_null(ptr, type, member) ({ \
 	struct list_head *head__ = (ptr); \
-	struct list_head *pos__ = READ_ONCE(head__->next); \
+	struct list_head *pos__ = READ_ONCE_FOR_LIST(head__->next); \
 	pos__ != head__ ? list_entry(pos__, type, member) : NULL; \
 })
 
