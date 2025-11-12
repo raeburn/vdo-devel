@@ -50,7 +50,11 @@ static inline void read_once_size_for_list(const volatile void *p, void *res, in
   case 1: *(u8 *)res       = *(const volatile u8 *)p;       break;
   case 2: *(uint16_t *)res = *(const volatile uint16_t *)p; break;
   case 4: *(uint32_t *)res = *(const volatile uint32_t *)p; break;
+#if 0
   case 8: *(uint64_t *)res = *(const volatile uint64_t *)p; break;
+#else
+  case 8: *(void **)res = *(const volatile void **)p; break;
+#endif
   default:
     barrier();
 #pragma GCC diagnostic push
@@ -71,7 +75,11 @@ static inline void write_once_size_for_list(volatile void *p, void *res, int siz
   case 1: *(volatile u8 *)p       = *(u8 *)res;       break;
   case 2: *(volatile uint16_t *)p = *(uint16_t *)res; break;
   case 4: *(volatile uint32_t *)p = *(uint32_t *)res; break;
+#if 0
   case 8: *(volatile uint64_t *)p = *(uint64_t *)res; break;
+#else
+  case 8: *(volatile void **)p = *(void **)res; break;
+#endif
   default:
     barrier();
 #pragma GCC diagnostic push
