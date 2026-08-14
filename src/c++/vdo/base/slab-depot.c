@@ -2500,10 +2500,13 @@ static void finish_loading_journal(struct vdo_completion *completion)
 	struct packed_slab_journal_block *block = (struct packed_slab_journal_block *) vio->data;
 	struct slab_journal_block_header header;
 
-	vdo_unpack_slab_journal_block_header(&block->header, &header);
-
-	/* FIXME: should it be an error if the following conditional fails? */
-	if ((header.metadata_type == VDO_METADATA_SLAB_JOURNAL) &&
+	/*
+	 * A bad has_block_map_increments byte means the block is unreadable;
+	 * treat it the same as a nonce mismatch and leave the journal empty.
+	 * FIXME: should any of these mismatches be treated as errors?
+	 */
+	if (vdo_unpack_slab_journal_block_header(&block->header, &header) == VDO_SUCCESS &&
+	    (header.metadata_type == VDO_METADATA_SLAB_JOURNAL) &&
 	    (header.nonce == slab->allocator->nonce)) {
 		journal->tail = header.sequence_number + 1;
 
@@ -2934,9 +2937,9 @@ static void apply_journal_entries(struct vdo_completion *completion)
 			(struct packed_slab_journal_block *) block_data;
 		struct slab_journal_block_header header;
 
-		vdo_unpack_slab_journal_block_header(&block->header, &header);
-
-		if ((header.nonce != slab->allocator->nonce) ||
+		result = vdo_unpack_slab_journal_block_header(&block->header, &header);
+		if (result != VDO_SUCCESS ||
+		    (header.nonce != slab->allocator->nonce) ||
 		    (header.metadata_type != VDO_METADATA_SLAB_JOURNAL) ||
 		    (header.sequence_number != sequence) ||
 		    (header.entry_count > journal->entries_per_block) ||
