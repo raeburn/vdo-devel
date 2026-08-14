@@ -701,6 +701,10 @@ static bool auditVDO(void)
   if (result != VDO_SUCCESS) {
     return false;
   }
+  if (slabSummaryEntries == NULL) {
+    warnx("Could not read slab summary: zone_count is zero");
+    return false;
+  }
 
   // Audit stored versus counted mapped logical blocks.
   block_count_t savedLBNCount
