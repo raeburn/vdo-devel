@@ -94,7 +94,11 @@ int loadVDOWithGeometry(PhysicalLayer           *layer,
     }
   }
 
-  setDerivedSlabParameters(vdo);
+  result = setDerivedSlabParameters(vdo);
+  if (result != VDO_SUCCESS) {
+    freeUserVDO(&vdo);
+    return result;
+  }
 
   *vdoPtr = vdo;
   return VDO_SUCCESS;
@@ -182,13 +186,17 @@ int saveVDO(UserVDO *vdo, bool saveGeometry)
 }
 
 /**********************************************************************/
-void setDerivedSlabParameters(UserVDO *vdo)
+int setDerivedSlabParameters(UserVDO *vdo)
 {
   vdo->slabSizeShift = ilog2(vdo->states.vdo.config.slab_size);
   vdo->slabCount = vdo_compute_slab_count(vdo->states.slab_depot.first_block,
                                           vdo->states.slab_depot.last_block,
                                           vdo->slabSizeShift);
+  if (vdo->slabCount == 0)
+    // reason already logged
+    return VDO_BAD_CONFIGURATION;
   vdo->slabOffsetMask = (1ULL << vdo->slabSizeShift) - 1;
+  return VDO_SUCCESS;
 }
 
 /**********************************************************************/
