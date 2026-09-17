@@ -121,4 +121,18 @@ static inline void put_unaligned_be64(uint64_t val, void *p)
 	*((__be64 *)p) = __cpu_to_be64(val);
 }
 
+
+/* Native byte order */
+#define get_unaligned(ptr) __extension__({			\
+	typeof(*(ptr)) __attribute__((aligned(1))) *__gu_p =	\
+		(typeof(*(ptr)) __attribute__((aligned(1))) *)(ptr);\
+	*__gu_p;						\
+})
+
+#define put_unaligned(val, ptr) __extension__({			\
+	typeof(*(ptr)) __attribute__((aligned(1))) *__pu_p =	\
+		(typeof(*(ptr)) __attribute__((aligned(1))) *)(ptr);\
+	*__pu_p = (val);					\
+})
+
 #endif /* LINUX_UNALIGNED_H */
